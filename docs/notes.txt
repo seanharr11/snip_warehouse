@@ -1,0 +1,46 @@
+1. *PLTP:* Preferred Top-level Placement
+2. *SPDI:* Allele in SPDI syntax of SEQUENCE-ID:POSITION:DEL-SEQUENCE:INS-SEQUENCE
+    a. i.e. NC_000001.10:12345:0:C
+3. *GRC:* Genome Reference Consortium
+4. *HGVS:* Human Genome Variation Society
+    a. http://varnomen.hgvs.org/bg-material/simple/
+    b. NC_000023.10 - Reference Sequence
+        i. *Accession Number*: NC_000023
+            1. *RefSeq Accession #'s*: https://www.ncbi.nlm.nih.gov/books/NBK21091/table/ch18.T.refseq_accession_numbers_and_mole/?report=objectonly
+            3. FTP RefSeq Download (Human): ftp://ftp.ncbi.nih.gov/refseq/H_sapiens/RefSeqGene/
+            3. AC_	Genomic	Complete genomic molecule, usually alternate assembly
+               NC_	Genomic	Complete genomic molecule, usually reference assembly
+               NG_	Genomic	Incomplete genomic region
+               NT_	Genomic	Contig or scaffold, clone-based or WGSa
+               NW_	Genomic	Contig or scaffold, primarily WGSa
+               NZ_b	Genomic	Complete genomes and unfinished WGS data
+               NM_	mRNA	Protein-coding transcripts (usually curated)
+               NR_	RNA	Non-protein-coding transcripts
+               XM_c	mRNA	Predicted model protein-coding transcript
+               XR_c	RNA	Predicted model non-protein-coding transcript
+               AP_	Protein	Annotated on AC_ alternate assembly
+               NP_	Protein	Associated with an NM_ or NC_ accession
+               YP_c	Protein	Annotated on genomic molecules without an instantiated
+                   transcript record
+               XP_c	Protein	Predicted model, associated with an XM_ accession
+               WP_	Protein	Non-redundant across multiple strains and species
+        ii. Version Number: .10
+    c. NC_000023.9:g.954966C>T
+        i. Genomic ref seq based on chromosome
+    d. NG_ ...
+        i. Genomic ref seq based on a Gene or Genomic region
+    e. LRG_ ... A genomic reference sequence, used in diagnostic setting, based on Gene or Genomic region
+    f. NP_ ...
+        i. Ref seq based on a protein (amino acid) sequence
+        ii. NP_003997.1:p.Arg1459* (p.Arg1459Ter)
+    g. *Deletion*: c.4375_4379del or c.4375_4379delGATT
+        i. Nucleotides from c.4375 -> c.4379 are deleted
+    h. *Substitution*: c.4375C>T
+        i. Nucleotide C at position c.4375 changed to a T
+    i. *Duplication*: c.4375_4385dup
+        i. Nucleotides from 4375 -> 4385 are duplicated
+    j. *Insertion*: c.4375_4376insACCT
+        i. "ACCT" was isnerted in b/t positions c.4375 and c.4376
+    k. *Replacement (indel)*: c.4375_4376delinsAGTT
+        i. Nucleotides from 4375 -> 4376 (CG) were deleted, and replaced w/ new seq.
+

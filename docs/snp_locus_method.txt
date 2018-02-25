@@ -1,0 +1,40 @@
+This is the process I used:
+
+0. Download your file from 23andme.
+
+1. Download dbSNP from NCBI at ftp://ftp.ncbi.nih.gov/snp/.
+You only need database/shared_data/SnpFunctionCode.bcp.gz
+and database/organisms/human_9606/database/organism_data/b132_SNPContigLocusId_37_1.bcp.gz
+.
+
+2. Read the explanation of SNPContigLocusId at
+http://www.ncbi.nlm.nih.gov/projects/SNP/snp_db_table_description.cgi?t=SNPContigLocusId
+
+3. Build a database from b132_SNPContigLocusId_37_1.bcp.
+Save snp_id, locus_symbol (gene name when in a gene), protein_acc,
+fxn_class, allele.
+Index by snp_id.
+
+4. Download OMIM from ftp://ftp.ncbi.nih.gov/repository/OMIM/ARCHIVE/ .
+
+5. Build a DB from OMIM/ARCHIVE/genebank and omim.txt.
+Read dominance info from omim.txt.
+Read other info from genebank.
+Read genebank.key for description.
+Save locus, gene, and disorder.
+(Join the 3 disorder fields together, throwing out fields that are
+just a space.)
+Parse the gene field into individual gene symbols.
+
+6. Parse your 23andme file.
+For each rs# in the file, strip off the 'rs' and look up the number in
+your SNPContigLocusId db.
+Retrieve the locus_symbol, allele, and fxn_class.
+If fxn_class is in the range 41-44 (bad mutations that destroy the protein),
+look up the locus_symbol in omim.
+If you find it, retrieve the associated dominance and disorder.
+Check the genotype from your 23andme data against
+the allele of the SNP and the dominance info (if any).
+If it is possible for the individual to have a disease caused by this
+mutation, print out the SNP info, including disease;
+and add the associated diseases to your list of possible diseases.
