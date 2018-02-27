@@ -1,15 +1,21 @@
 import json
 import csv
 import abc
-from collections import defaultdict, namedtuple
+from collections import namedtuple
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from snp_matcher.schema import (
+    Gene, Allele, AlleleFrequency, AlleleClinicalDiseaseNames)
+import sys
 
 
-FrequencyStudy = named_tuple('FrequencyStudy', [
+FrequencyStudy = namedtuple('FrequencyStudy', [
     'project_name',
     'allele_count',
     'total_count',
     'freq'])
 # https://www.ncbi.nlm.nih.gov/books/NBK21088/table/ch5.ch5_t3/?report=objectonly
+
 
 class Variant(metaclass=abc.ABCMeta):
     def __init__(self, variant_object):
@@ -25,14 +31,11 @@ class SNPVariant(Variant):
     pass
 
 
-
-######################## NEW FILE ############################
-
 # This takes a variant source, which contains a collection of various
 # variants of different types, and standardizes the data
 class DbSNPVariant(Variant):
     pass
-####################### NEW FILE ##############################
+
 
 class SNPVariantMatcher:
     def __init__(self):
@@ -45,6 +48,8 @@ class SNPVariantMatcher:
 
         self.matched_snps = {}
         self.variant_sources = []
+
+        self.ref_variant_generator = open("refsnp-chr1.json", "r").readlines()
 
     def add_variant_source(self, variant_source):
         self.variant_sources.append(variant_source)
@@ -81,43 +86,94 @@ class SNPVariantMatcher:
             variant_writer.writeheader()
             self.find_and_print_variants(variant_writer)
 
-    def load_ref_snps(self, variant_writer):
+    def load_ref_snps(self):
+        engine = create_engine("./data/snps.sql")
         for line in self.ref_variant_generator:
             self._check_and_log_status()
             rsnp_json = json.loads(line.decode('utf-8'))
             rsnp_placements = rsnp_json['primary_snapshot_data'][
                                     'placements_with_allele']
-            if not rsnp_data:
+            refsnp_id = rsnp_json['refsnp_id']
+            if not rsnp_placements:
                 continue
-            alleles = self.find_alleles_from_assembly(rnsp_placements)
+            alleles = self.find_alleles_from_assembly(rsnp_placements)
             variant_allele = self.get_variant_allele(alleles)
             # TODO: Save this in a table
+            session = sessionmaker()(bind=engine)
             allele_annotation = self.get_allele_annotation(
                                     rsnp_json,
                                     variant_allele['allele_idx'])
-            # TODO: Save each key in a table, that refers to variant_allele
+            genes = allele_annotation['genes']
+            if len(genes) > 1:
+                print(f"Multiple Genes: {genes}")
+            gene = Gene(gene_id=genes[0]['id'],
+                        locus=genes[0]['locus'],
+                        name=genes[0]['name'])
+            session.add(gene)
+            allele = Allele(rsnp_id=refsnp_id,
+                            ref_seq=variant_allele['ref_seq'],
+                            alt_seq=variant_allele['alt_seq'],
+                            position=variant_allele['position'],
+                            gene_id=gene.id)
+            session.add(allele)
+            allele_freqs = [AlleleFrequency(
+                project_name=af.project_name,
+                allele_count=af.allele_count,
+                total_count=af.total_count,
+                allele_id=allele.id)
+                    for af in allele_annotation['frequency_studies']]
+            session.add(allele_freqs)
+            allele_disease_name = AlleleClinicalDiseaseNames(
+                allele_id=allele.id,
+                disease_names=allele_annotation['disease_names'])
+            session.add(allele_disease_name)
+            session.commit()
 
-    def get_allele_annotations(self, rsnp_obj, allele_idx):
+    def find_alleles_from_assembly(rsnp_placements,
+                                   assembly_name="GRCh38"):
+        for rsnp_placement in rsnp_placements:
+            annot = rsnp_placements.get('placement_annot')
+            if not annot or not annot.get('seq_id_traits_by_assembly'):
+                return
+            assembly_info = annot['seq_id_traits_by_assembly']
+            this_assembly_name = assembly_info.get("assembly_name") or None
+            if this_assembly_name == assembly_name:
+                alleles = rsnp_placement['alleles']
+                return alleles
+
+    def get_variant_allele(alleles):
+        # Find the allele that represents the variation
+        allele_tup = [(a, i) for (i, a) in enumerate(alleles)
+                      if a['allele']['spdi']['inserted_sequence'] !=
+                      a['allele']['spdi']['deleted_sequence']][0]
+        var_spdi = allele_tup[0]['allele']['spdi']
+        allele_idx = allele_tup[1]
+        return {
+            'ref_seq': var_spdi['deleted_sequence'],
+            'alt_seq': var_spdi['inserted_sequence'],
+            'position': var_spdi['position'],
+            'allele_idx': allele_idx
+        }
+
+    def get_allele_annotation(self, rsnp_obj, allele_idx):
         var_allele_annotation = rsnp_obj['primary_snapshot_data'][
                                     'allele_annotations'][
                                     allele_idx]
         assembly_annot = var_allele_annotation['assembly_annotation']
-        freq = var_allele_annotation['frequency']
+        frequencies = var_allele_annotation['frequency']
         return {'frequency_studies': [FrequencyStudy(
                     project_name=freq['project_name'],
                     allele_count=freq['allele_count'],
-                    total_count=freq['total_count'],
-                    freq=round(100 * allele_count / total_count, 2))
-                        for freq in freq],
-                'clinical': var_allele_annotation['clinical'],
-                # TODO: Just store clinical[1...n].disease_names & citations?
-
+                    total_count=freq['total_count'])
+                        for freq in frequencies],
+                'disease_names': "\n".join(
+                    [clin['disease_names'] for clin in var_allele_annotation[
+                        'clinical']]),
                 # TODO: Multiple assembly annotations?
-                # TODO: Create 'assembly_annot' type
                 'genes': assembly_annot[0]['genes']
-                    if assembly_annot else None,
+                if assembly_annot else None,
                 # TODO: Just store gene 'names' and 'locus'
-                'seq_id': assembly_annoy[0]['seq_id']}
+                'seq_id': assembly_annot[0]['seq_id']}
 
     def load_snps(self):
         with open(self.snp_input_filename, "r") as fp_snps:
@@ -132,32 +188,7 @@ class SNPVariantMatcher:
                     'pos': int(line['position'])
                 }
 
-    def find_alleles_from_assembly(rsnp_placements,
-                                   assembly_name="GRCh38"):
-        for rsnp_placement in rsnp_placements:
-            annot = rsnp_placements.get('placement_annot')
-            if not annot or not annot.get('seq_id_traits_by_assembly')
-                return
-            assembly_info = annot['seq_id_traits_by_assembly']
-            this_assembly_name = assembly_info.get("assembly_name") or None
-            if this_assembly_name == assembly_name:
-                alleles = rnsp_placement['alleles']
-                return alleles
-
-    def get_variant_allele(alleles):
-        # Find the allele that represents the variation
-        allele_tup = [(a, i) for (i, a) in enumerate(alleles)
-                    if a['allele']['spdi']['inserted_sequence'] !=
-                    a['allele']['spdi']['deleted_sequence']][0]
-        var_spdi = allele_tup[0]['allele']['spdi']
-        allele_idx = allele_tup[1]
-        return {
-            'ref': var_spdi['deleted_sequence'],
-            'alt': var_spdi['inserted_sequence'],
-            'pos': var_spdi['position'],
-            'allele_idx': allele_idx
-        })
-
     if __name__ == "__main__":
-        my_snps = load_snps()
-        lookup_ref_snps(my_snps, ref_snp_filename)
+        load_ref_snps(sys.argv[1])
+        # my_snps = load_snps()
+        # lookup_ref_snps(my_snps, ref_snp_filename)
