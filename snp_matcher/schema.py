@@ -1,63 +1,83 @@
 # coding: utf-8
-from sqlalchemy import (
-    BigInteger, Column, ForeignKey,
-    Integer, Text, create_engine)
-from sqlalchemy.ext.declarative import declarative_base
+import asyncio
+from gino import Gino
 
-Base = declarative_base()
-metadata = Base.metadata
+db = Gino()
 
 
-class Gene(Base):
+class Gene(db.Model):
     __tablename__ = 'genes'
 
-    id = Column(Integer, primary_key=True)
-    gene_id = Column(Integer, index=True)
-    tax_id = Column(Integer)
-    locus = Column(Text, index=True)
-    symbol = Column(Text)
-    typ = Column(Text)
-    description = Column(Text)
+    id = db.Column(db.Integer, primary_key=True)
+    gene_id = db.Column(db.Integer, index=True)
+    tax_id = db.Column(db.Integer)
+    locus = db.Column(db.Text, index=True)
+    symbol = db.Column(db.Text)
+    typ = db.Column(db.Text)
+    description = db.Column(db.Text)
 
 
-class GeneSnv(Base):
+class GeneSnv(db.Model):
     __tablename__ = "gene_snvs"
-    id = Column(Integer, primary_key=True)
-    gene_id = Column(Integer, index=True)
-    snv_id = Column(ForeignKey('genes.id'), index=True)
-    locus = Column(Text, index=True)
+    id = db.Column(db.Integer, primary_key=True)
+    gene_id = db.Column(db.Integer, index=True)
+    snv_id = db.Column(db.ForeignKey('genes.id'), index=True)
+    locus = db.Column(db.Text, index=True)
 
 
-class Snv(Base):
+class Snv(db.Model):
     __tablename__ = 'snvs'
 
-    id = Column(Integer, primary_key=True)
-    rsnp_id = Column(Text, index=True)
-    ref_seq = Column(Text, index=True)
-    alt_seq = Column(Text, index=True)
-    position = Column(BigInteger)
+    id = db.Column(db.Integer, primary_key=True)
+    rsnp_id = db.Column(db.Text, index=True)
+    ref_seq = db.Column(db.Text, index=True)
+    alt_seq = db.Column(db.Text, index=True)
+    position = db.Column(db.BigInteger)
 
 
-class SnvFrequency(Base):
+class SnvFrequency(db.Model):
     __tablename__ = 'snv_frequencies'
 
-    id = Column(Integer, primary_key=True)
-    project_name = Column(Text)
-    allele_count = Column(Integer)
-    total_count = Column(Integer)
-    snv_id = Column(ForeignKey('snvs.id'), index=True)
+    id = db.Column(db.Integer, primary_key=True)
+    project_name = db.Column(db.Text)
+    allele_count = db.Column(db.Integer)
+    total_count = db.Column(db.Integer)
+    snv_id = db.Column(db.ForeignKey('snvs.id'), index=True)
 
 
-class SnvClinicalDiseaseName(Base):
+class SnvClinicalDiseaseName(db.Model):
     __tablename__ = 'snv_clinical_disease_names'
 
-    id = Column(Integer, primary_key=True)
-    snv_id = Column(ForeignKey('snvs.id'), index=True)
-    disease_name_csv = Column(Text)
-    clinical_significance_csv = Column(Text)
-    citation_csv = Column(Text)
+    id = db.Column(db.Integer, primary_key=True)
+    snv_id = db.Column(db.ForeignKey('snvs.id'), index=True)
+    disease_name_csv = db.Column(db.Text)
+    clinical_significance_csv = db.Column(db.Text)
+    citation_csv = db.Column(db.Text)
 
+
+class UserSnv(db.Model):
+    __tablename__ = 'user_snvs'
+
+    snv_id = db.Column(db.ForeignKey('snvs.id'), index=True)
+    user_id = db.Column(db.ForeignKey('users.id'), index=True)
+    genotype = db.Column(db.String(2), index=True)
+    sort = db.Column(db.Integer, index=True)
+
+
+class User(db.Model):
+    __tablename__ = 'users'
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String)
+    fname = db.Column(db.String)
+    lname = db.Column(db.String)
+    sex = db.Column(db.String(1))
+    ethnicity = db.Column(db.String)
+
+
+async def main():
+    await db.set_bind("postgresql://localhost/snvs")
+    await db.gino.create_all()
 
 if __name__ == "__main__":
-    engine = create_engine("sqlite:///../data/snps.sql")
-    metadata.create_all(engine)
+    asyncio.get_event_loop().run_until_complete(main())
