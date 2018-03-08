@@ -1,9 +1,10 @@
-import asyncio
-import asyncpg
-import ujson as json
-import csv
+# import asyncio
 import abc
+import asyncpg
 from collections import namedtuple
+import ftplib
+import ujson as json
+import zlib
 
 # from .schema import (
 #     Snv, SnvFrequency, SnvClinicalDiseaseName, GeneSnv)
@@ -36,59 +37,44 @@ class DbSNPVariant(Variant):
 
 
 class SnvLoader:
-    def __init__(self, filename, db_conn_string):
+    def __init__(self, db_conn_string):
         self._variant_output_filename = "./variants.csv"
-
-        self.heterozygous_snp_cnt = 0
-        self.homozygous_snp_cnt = 0
-        self.unexpected_snp_cnt = 0
         self.rows_processed = 0
-
-        self.matched_snps = {}
-        self.variant_sources = []
-
-        self.ref_variant_generator = open(filename, "r")
         self.db_conn_string = db_conn_string
 
-    def add_variant_source(self, variant_source):
-        self.variant_sources.append(variant_source)
+    def download_dbsnp_file(self, dbsnp_filename):
+        decompressor = zlib.decompressobj(32 + zlib.MAX_WBITS)
+        transferred = 0
+        fp = open(dbsnp_filename.replace(".gz", ""), "wb")
+        blocksize = 8192
+        ftp = ftplib.FTP("ftp.ncbi.nlm.nih.gov")
+        ftp.login()
+        ftp.cwd("snp/.redesign/latest_release/JSON")
+        size = ftp.size(dbsnp_filename)
 
-    def match(self):
-        self.variant_source[0].load()
-        self.matched_snps = {v.get_id(): v for v in self.variant_source[0]}
-        for variant_source in self.variant_sources[1:]:
-            variant_source.load()
-            for variant in variant_source:
-                if self.matched_snps.get(variant.get_id()):
-                    self.matched_snaps[variant.get_id()].append(variant)
+        def callback(byte_chunk):
+            nonlocal transferred
+            fp.write(decompressor.decompress(byte_chunk))
+            transferred = transferred + 8192
+            transferred_mb = transferred / 1024 / 1024
+            if transferred_mb % 10 == 0:
+                print(
+                    f"Transferred {transferred_mb}MB / {size / 1024 / 1024}MB")
+
+        print(f"Filesize: {size / 1024 / 1024 / 1024}GB")
+        ftp.retrbinary(f"RETR {dbsnp_filename}", callback, blocksize=blocksize)
 
     def _print_status(self):
         if self.rows_processed % 10000 == 0:
-            print(
-                """Processed '{0}' Ref SNPs
-                ---> Heterozygous Count: '{1}'
-                ---> Homozygous Count: '{2}'
-                ---> Untracked SNP Count: '{3}'
-                """.format(str(self.rows_processed),
-                           str(self.heterozygous_snp_cnt),
-                           str(self.homozygous_snp_cnt),
-                           str(self.unexpected_snp_cnt)))
+            print(f"Processed '{self.rows_processed}' Ref SNPs")
         self.rows_processed += 1
 
-    def detect_variants(self):
-        field_names = ['refsnp_id', 'ref_pos', 'pos', 'distance', 'allele_cnt',
-                       'total_cnt', 'allele_freq', 'variant_type',
-                       'is_homozygous', 'is_untracked_variant', 'clinical',
-                       'gene']
-        with open(self.variant_output_filename, "w") as fp_w:
-            variant_writer = csv.DictWriter(fp_w, fieldnames=field_names)
-            variant_writer.writeheader()
-            self.find_and_print_variants(variant_writer)
-
-    async def load_ref_snps(self):
+    async def load_ref_snps(self, dbsnp_filename):
+        self.ref_variant_generator = open(dbsnp_filename, "rb")
         snv_id = 0
         pool = await asyncpg.create_pool(user='SeanH', database="snvs")
         connections = [await pool.acquire() for _ in range(4)]
+        conn = connections[0]
         for table_name in ["snvs", "gene_snvs", "genes",
                            "snv_frequencies", "snv_clinical_disease_names"]:
             await connections[0].execute(
@@ -97,7 +83,7 @@ class SnvLoader:
             if snv_id == 50000:
                 exit(0)
             lines = ",\n".join(self.ref_variant_generator.readlines(
-                1024*1024*5))  # 5KB
+                1024*1024*8))  # 8MB
             if not lines:
                 return
             json_ls = json.loads(f"[{lines}]")
@@ -145,15 +131,9 @@ class SnvLoader:
                 ('snv_clinical_disease_names',
                     ('snv_id', 'disease_name_csv', 'clinical_significance_csv',
                      'citation_csv'), snv_disease_names)]
-            q_futures = []
-
             for j, (table_name, columns, records) in enumerate(insert_queries):
-                conn = connections[j]
-                q_futures.append(
-                    conn.copy_records_to_table(
-                         table_name, columns=columns, records=records))
-            results = await asyncio.gather(*q_futures)
-            print(results)
+                conn.copy_records_to_table(table_name, columns=columns,
+                                           records=records)
 
     def find_alleles_from_assembly(self,
                                    rsnp_placements,
@@ -208,16 +188,3 @@ class SnvLoader:
                 if assembly_annot else None,
                 # TODO: Just store gene 'names' and 'locus'
                 'seq_id': assembly_annot[0]['seq_id']}
-
-    def load_snps(self):
-        with open(self.snp_input_filename, "r") as fp_snps:
-            dr_snps = csv.DictReader([l for l in fp_snps
-                                      if not l.startswith('#')],
-                                     delimiter='\t')
-            for line in dr_snps:
-                # rsid chromosome position genotype
-                stripped_rsid = line['rsid'].replace("rs", "").replace("i", "")
-                self.snps[stripped_rsid] = {
-                    'genotype': line['genotype'],
-                    'pos': int(line['position'])
-                }
