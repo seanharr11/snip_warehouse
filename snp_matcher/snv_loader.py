@@ -1,5 +1,4 @@
 # import asyncio
-import abc
 import asyncpg
 from collections import namedtuple
 import ftplib
@@ -10,37 +9,18 @@ import zlib
 #     Snv, SnvFrequency, SnvClinicalDiseaseName, GeneSnv)
 
 FrequencyStudy = namedtuple('FrequencyStudy', [
-    'project_name',
+    'name',
     'allele_count',
     'total_count'])
 # https://www.ncbi.nlm.nih.gov/books/NBK21088/table/ch5.ch5_t3/?report=objectonly
 
 
-class Variant(metaclass=abc.ABCMeta):
-    def __init__(self, variant_object):
-        self.variant_object = variant_object
-        # TODO: parse this into self attribuets!
-
-    @abc.abstractmethod
-    def get_id():
-        pass
-
-
-class SNPVariant(Variant):
-    pass
-
-
-# This takes a variant source, which contains a collection of various
-# variants of different types, and standardizes the data
-class DbSNPVariant(Variant):
-    pass
-
-
 class SnvLoader:
-    def __init__(self, db_conn_string):
+    def __init__(self, database_name):  # , db_conn_string):
         self._variant_output_filename = "./variants.csv"
         self.rows_processed = 0
-        self.db_conn_string = db_conn_string
+        self.database_name = database_name
+        # self.db_conn_string = db_conn_string
 
     def download_dbsnp_file(self, dbsnp_filename):
         decompressor = zlib.decompressobj(32 + zlib.MAX_WBITS)
@@ -70,70 +50,88 @@ class SnvLoader:
         self.rows_processed += 1
 
     async def load_ref_snps(self, dbsnp_filename):
-        self.ref_variant_generator = open(dbsnp_filename, "rb")
-        snv_id = 0
-        pool = await asyncpg.create_pool(user='SeanH', database="snvs")
+        self.ref_variant_generator = open(dbsnp_filename, "r")
+        pool = await asyncpg.create_pool(
+            user='SeanH', database=self.database_name)
         connections = [await pool.acquire() for _ in range(4)]
         conn = connections[0]
-        for table_name in ["snvs", "gene_snvs", "genes",
-                           "snv_frequencies", "snv_clinical_disease_names"]:
-            await connections[0].execute(
-                f"ALTER TABLE {table_name} DISABLE TRIGGER ALL;")
+        for cxn in connections:
+            await cxn.execute(
+                f"SET session_replication_role = replica")
+        new_ref_snp_id = 1
         while True:
-            if snv_id == 50000:
-                exit(0)
             lines = ",\n".join(self.ref_variant_generator.readlines(
                 1024*1024*8))  # 8MB
             if not lines:
                 return
             json_ls = json.loads(f"[{lines}]")
-            snvs, gene_snvs, snv_freqs, snv_disease_names = [], [], [], []
+            snvs, gene_snvs, snv_freqs, snv_clinical_diseases = [], [], [], []
             for rsnp_json in json_ls:
                 self._print_status()
                 rsnp_placements = rsnp_json['primary_snapshot_data'][
                                         'placements_with_allele']
-                refsnp_id = rsnp_json['refsnp_id']
+                ref_snp_id = int(rsnp_json['refsnp_id'])
                 if not rsnp_placements:
                     continue
                 alleles = self.find_alleles_from_assembly(rsnp_placements)
                 if not alleles:
                     continue
-                variant_allele = self.get_variant_allele(alleles)
+                variant_alleles = self.get_variant_allele(alleles)
+                if not variant_alleles:
+                    continue
                 # Save to Database
-                snv_id += 1
-                allele_annotation = self.get_allele_annotation(
-                    rsnp_json, variant_allele['allele_idx'])
-                snvs.append((refsnp_id,
-                             variant_allele['ref_seq'],
-                             variant_allele['alt_seq'],
-                             variant_allele['position'],))
-                gene_snvs += [(snv_id,
-                               gene['locus'],
-                               gene['id'],)
-                              for gene in allele_annotation['genes']]
-                snv_freqs += [(af.project_name,
-                               af.allele_count,
-                               af.total_count,
-                               snv_id,)
-                              for af in allele_annotation['frequency_studies']]
-                snv_disease_names += [
-                    (snv_id,
-                     clin['disease_names'],
-                     clin['clinical_significances'],
-                     clin['citation_csv'],)
-                    for clin in allele_annotation['clinical_entries']]
-
+                new_ref_snp_id += 1
+                for variant_allele in variant_alleles:
+                    allele_annotation = self.get_allele_annotation(
+                        rsnp_json, variant_allele['allele_idx'])
+                    snvs.append((ref_snp_id,
+                                 variant_allele['ref_seq'],
+                                 variant_allele['alt_seq'],
+                                 variant_allele['position'],))
+                    gene_snvs += [(new_ref_snp_id,
+                                   gene['locus'],
+                                   gene['id'],)
+                                  for gene in allele_annotation['genes']]
+                    # NOTE: The 'observation' is stored in JSON redundantly...
+                    snv_freqs += [(new_ref_snp_id,
+                                   fs.name,
+                                   fs.allele_count,
+                                   fs.total_count)
+                                  for fs in allele_annotation[
+                                      'frequency_studies']]
+                    snv_clinical_diseases += [
+                        (new_ref_snp_id,
+                         clin['disease_names'],
+                         clin['clinical_significances'],
+                         clin['citation_list'],)
+                        for clin in allele_annotation['clinical_entries']]
             insert_queries = [
-                ('snvs', ('rsnp_id', 'ref_seq', 'alt_seq', 'position'), snvs),
-                ('gene_snvs', ('snv_id', 'locus', 'gene_id'), gene_snvs),
-                ('snv_frequencies',
-                 ('project_name', 'allele_count', 'total_count'), snv_freqs),
-                ('snv_clinical_disease_names',
-                    ('snv_id', 'disease_name_csv', 'clinical_significance_csv',
-                     'citation_csv'), snv_disease_names)]
+                ('ref_snp_alleles',
+                    ('ref_snp_id', 'ref_seq', 'alt_seq', 'position'), snvs),
+                ('gene_ref_snp_alleles',
+                    ('ref_snp_allele_id', 'locus', 'gene_id'), gene_snvs),
+                ('ref_snp_allele_freq_studies',
+                 ('ref_snp_allele_id', 'name', 'allele_count',
+                  'total_count'),
+                 snv_freqs),
+                ('ref_snp_allele_clin_diseases',
+                    ('ref_snp_allele_id', 'disease_name_csv',
+                     'clinical_significance_csv', 'citation_list'),
+                    snv_clinical_diseases)]
+            # futures = []
             for j, (table_name, columns, records) in enumerate(insert_queries):
-                conn.copy_records_to_table(table_name, columns=columns,
-                                           records=records)
+                """futures.append(connections[j].copy_records_to_table(
+                               table_name,
+                               columns=columns,
+                               records=records))
+                """
+                await conn.copy_records_to_table(
+                                   table_name,
+                                   columns=columns,
+                                   records=records)
+            # await asyncio.gather(*futures)
+        conn.commit()
+        conn.close()
 
     def find_alleles_from_assembly(self,
                                    rsnp_placements,
@@ -154,17 +152,22 @@ class SnvLoader:
 
     def get_variant_allele(self, alleles):
         # Find the allele that represents the variation
-        allele_tup = [(a, i) for (i, a) in enumerate(alleles)
-                      if a['allele']['spdi']['inserted_sequence'] !=
-                      a['allele']['spdi']['deleted_sequence']][0]
-        var_spdi = allele_tup[0]['allele']['spdi']
-        allele_idx = allele_tup[1]
-        return {
-            'ref_seq': var_spdi['deleted_sequence'],
-            'alt_seq': var_spdi['inserted_sequence'],
-            'position': var_spdi['position'],
-            'allele_idx': allele_idx
-        }
+        variant_allele_tups = [(a, i) for (i, a) in enumerate(alleles)
+                               if a['allele']['spdi']['inserted_sequence'] !=
+                               a['allele']['spdi']['deleted_sequence']]
+        if not variant_allele_tups:
+            return {}
+        var_alleles = []
+        for allele_tup in variant_allele_tups:
+            var_spdi = allele_tup[0]['allele']['spdi']
+            allele_idx = allele_tup[1]
+            var_alleles.append({
+                'ref_seq': var_spdi['deleted_sequence'],
+                'alt_seq': var_spdi['inserted_sequence'],
+                'position': var_spdi['position'],
+                'allele_idx': allele_idx
+            })
+        return var_alleles
 
     def get_allele_annotation(self, rsnp_obj, allele_idx):
         var_allele_annotation = rsnp_obj['primary_snapshot_data'][
@@ -173,11 +176,11 @@ class SnvLoader:
         assembly_annot = var_allele_annotation['assembly_annotation']
         frequencies = var_allele_annotation['frequency']
         fs = [FrequencyStudy(
-            project_name=freq['project_name'],
+            name=freq['study_name'],
             allele_count=freq['allele_count'],
-            total_count=freq['total_count']) for freq in frequencies]
+            total_count=freq['total_count']) for freq in frequencies if freq]
         clinical_entries = [{
-            'citation_csv': ','.join(map(lambda c: str(c), clin['citations'])),
+            'citation_list': clin['citations'],
             'disease_names': ",".join(clin['disease_names']),
             'clinical_significances': ",".join(clin['clinical_significances'])}
                 for clin in var_allele_annotation['clinical']]
