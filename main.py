@@ -9,9 +9,10 @@ async def get_user_diseases(request):
     # TODO: Store citation_csv as an Array
     async with app['conn_pool'].acquire() as conn:
         significance_group_future = conn.fetch("""
-            SELECT array_agg(citation_csv) citation_csv,
-                   array_agg(disease_name_csv) disease_name_csv,
-                   array_agg(
+            SELECT array_agg(disease_name_csv) disease_name_ls,
+                   array_agg(array_to_string(citation_list, ',')) citation_ls,
+                   array_agg(s.genotype) genotype_ls,
+                   array_agg(a.alt_seq) alt_seq_ls,
                    Count(*) count,
                    clinical_significance_csv
             FROM ref_snp_allele_clin_diseases d
@@ -19,9 +20,21 @@ async def get_user_diseases(request):
             ON a.id = d.ref_snp_allele_id
             INNER JOIN user_ref_snps s ON s.ref_snp_id = a.ref_snp_id
             WHERE s.user_id = $1
+             AND s.genotype iLIKE '%' || a.alt_seq  || '%'
             GROUP BY clinical_significance_csv""", user_id)
         clin_sig_groups = {
-            row['clinical_significance_csv']: dict(row)
+            row['clinical_significance_csv']: [
+                {
+                   "disease_name": d,
+                   "alt_seq": alt,
+                   "genotype": geno,
+                   "citation_list": cit.split(",")
+                } for d, cit, alt, geno in zip(
+                    row['disease_name_ls'],
+                    row['citation_ls'],
+                    row['alt_seq_ls'],
+                    row['genotype_ls']
+                )]
             for row in await significance_group_future}
         res = web.Response(body=json.dumps(clin_sig_groups))
         res.headers['Content-Type'] = "application/json"
