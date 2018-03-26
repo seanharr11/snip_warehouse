@@ -1,0 +1,10 @@
+*env*
+env/
+*.json
+*.pyc
+*.gz
+*.tar*
+__pycache__/
+*.txt
+*.sql
+.ropeproject
