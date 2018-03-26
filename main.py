@@ -13,6 +13,7 @@ async def get_user_diseases(request):
                    array_agg(array_to_string(citation_list, ',')) citation_ls,
                    array_agg(s.genotype) genotype_ls,
                    array_agg(a.alt_seq) alt_seq_ls,
+                   array_agg(s.ref_snp_id) ref_snp_id_ls,
                    Count(*) count,
                    clinical_significance_csv
             FROM ref_snp_allele_clin_diseases d
@@ -28,12 +29,14 @@ async def get_user_diseases(request):
                    "disease_name": d,
                    "alt_seq": alt,
                    "genotype": geno,
-                   "citation_list": cit.split(",")
-                } for d, cit, alt, geno in zip(
+                   "citation_list": cit.split(","),
+                   "ref_snp_id": rsnp_id
+                } for d, cit, alt, geno, rsnp_id in zip(
                     row['disease_name_ls'],
                     row['citation_ls'],
                     row['alt_seq_ls'],
-                    row['genotype_ls']
+                    row['genotype_ls'],
+                    row['ref_snp_id_ls']
                 )]
             for row in await significance_group_future}
         res = web.Response(body=json.dumps(clin_sig_groups))
