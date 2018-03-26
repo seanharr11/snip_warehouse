@@ -58,14 +58,15 @@ class SnvLoader:
         for cxn in connections:
             await cxn.execute(
                 f"SET session_replication_role = replica")
-        new_ref_snp_id = 1
+        new_ref_snp_allele_id = 0
         while True:
             lines = ",\n".join(self.ref_variant_generator.readlines(
                 1024*1024*8))  # 8MB
             if not lines:
                 return
             json_ls = json.loads(f"[{lines}]")
-            snvs, gene_snvs, snv_freqs, snv_clinical_diseases = [], [], [], []
+            (ref_snp_alleles, gene_ref_snp_alleles,
+             snv_freqs, snv_clinical_diseases) = [], [], [], []
             for rsnp_json in json_ls:
                 self._print_status()
                 rsnp_placements = rsnp_json['primary_snapshot_data'][
@@ -79,37 +80,40 @@ class SnvLoader:
                 variant_alleles = self.get_variant_allele(alleles)
                 if not variant_alleles:
                     continue
-                # Save to Database
-                new_ref_snp_id += 1
                 for variant_allele in variant_alleles:
+                    # ref_snp_alleles.id is auto-incrementing, follow it!
+                    new_ref_snp_allele_id += 1
                     allele_annotation = self.get_allele_annotation(
                         rsnp_json, variant_allele['allele_idx'])
-                    snvs.append((ref_snp_id,
-                                 variant_allele['ref_seq'],
-                                 variant_allele['alt_seq'],
-                                 variant_allele['position'],))
-                    gene_snvs += [(new_ref_snp_id,
-                                   gene['locus'],
-                                   gene['id'],)
-                                  for gene in allele_annotation['genes']]
+                    ref_snp_alleles.append((ref_snp_id,
+                                            variant_allele['ref_seq'],
+                                            variant_allele['alt_seq'],
+                                            variant_allele['position'],))
+                    gene_ref_snp_alleles += [(new_ref_snp_allele_id,
+                                              gene['locus'],
+                                              gene['id'],)
+                                             for gene in allele_annotation[
+                                                 'genes']]
                     # NOTE: The 'observation' is stored in JSON redundantly...
-                    snv_freqs += [(new_ref_snp_id,
+                    snv_freqs += [(new_ref_snp_allele_id,
                                    fs.name,
                                    fs.allele_count,
                                    fs.total_count)
                                   for fs in allele_annotation[
                                       'frequency_studies']]
                     snv_clinical_diseases += [
-                        (new_ref_snp_id,
+                        (new_ref_snp_allele_id,
                          clin['disease_names'],
                          clin['clinical_significances'],
                          clin['citation_list'],)
                         for clin in allele_annotation['clinical_entries']]
             insert_queries = [
                 ('ref_snp_alleles',
-                    ('ref_snp_id', 'ref_seq', 'alt_seq', 'position'), snvs),
+                    ('ref_snp_id', 'ref_seq', 'alt_seq', 'position'),
+                    ref_snp_alleles),
                 ('gene_ref_snp_alleles',
-                    ('ref_snp_allele_id', 'locus', 'gene_id'), gene_snvs),
+                    ('ref_snp_allele_id', 'locus', 'gene_id'),
+                    gene_ref_snp_alleles),
                 ('ref_snp_allele_freq_studies',
                  ('ref_snp_allele_id', 'name', 'allele_count',
                   'total_count'),
