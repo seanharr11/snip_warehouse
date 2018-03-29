@@ -1,4 +1,5 @@
-# import asyncio
+import aiofiles
+import asyncio
 import asyncpg
 from collections import namedtuple
 import ftplib
@@ -17,10 +18,11 @@ FrequencyStudy = namedtuple('FrequencyStudy', [
 
 
 class SnvLoader:
-    def __init__(self, database_name):  # , db_conn_string):
+    def __init__(self, database_name, loop):  # , db_conn_string):
         self._variant_output_filename = "./variants.csv"
         self.rows_processed = 0
         self.database_name = database_name
+        self.loop = loop
         # self.db_conn_string = db_conn_string
 
     def download_dbsnp_file(self, dbsnp_filename):
@@ -52,94 +54,110 @@ class SnvLoader:
         self.rows_processed += 1
 
     async def load_ref_snps(self, dbsnp_filename):
-        self.ref_variant_generator = open(dbsnp_filename, "r")
+        dbsnp_fp = await aiofiles.open(dbsnp_filename, "r", loop=self.loop)
         pool = await asyncpg.create_pool(
-            user='SeanH', database=self.database_name)
+            user='SeanH', database=self.database_name, loop=self.loop)
+        blocksize = 1024 * 1024 * 8   # 8MB
         conn = await pool.acquire()
-        conn.execute(f"SET session_replication_role = replica")
+        await conn.execute(f"SET session_replication_role = replica")
         row = await conn.fetchrow(
             "SELECT MAX(id) FROM ref_snp_alleles")
-        new_ref_snp_allele_id = row[0] or 0
-        while True:
+        self.new_ref_snp_allele_id = row[0] or 0
+
+        json_ls = await self.read_json(dbsnp_fp, blocksize)
+        insert_stmts = []
+        while json_ls:
             # TODO: Multi-processing w/ file offsets, and Lock on
             # 'ref_snp_allele_id'
-            # TODO: Async read from file, and write to DB.
-            lines = ",\n".join(self.ref_variant_generator.readlines(
-                1024*1024*8))  # 8MB
-            if not lines:
-                return
-            json_ls = json.loads(f"[{lines}]")
-            (ref_snp_alleles, gene_ref_snp_alleles,
-             snv_freqs, snv_clinical_diseases) = [], [], [], []
-            for rsnp_json in json_ls:
-                self._print_status()
-                rsnp_placements = rsnp_json['primary_snapshot_data'][
-                                        'placements_with_allele']
-                ref_snp_id = int(rsnp_json['refsnp_id'])
-                if not rsnp_placements:
-                    continue
-                alleles = self.find_alleles_from_assembly(rsnp_placements)
-                if not alleles:
-                    continue
-                variant_alleles = self.get_variant_allele(alleles)
-                if not variant_alleles:
-                    continue
-                for variant_allele in variant_alleles:
-                    # ref_snp_alleles.id is auto-incrementing, follow it!
-                    new_ref_snp_allele_id += 1
-                    allele_annotation = self.get_allele_annotation(
-                        rsnp_json, variant_allele['allele_idx'])
-                    ref_snp_alleles.append((ref_snp_id,
-                                            variant_allele['del_seq'],
-                                            variant_allele['ins_seq'],
-                                            variant_allele['position'],))
-                    gene_ref_snp_alleles += [(new_ref_snp_allele_id,
-                                              gene['locus'],
-                                              gene['id'],)
-                                             for gene in allele_annotation[
-                                                 'genes']]
-                    # NOTE: The 'observation' is stored in JSON redundantly...
-                    snv_freqs += [(new_ref_snp_allele_id,
-                                   fs.name,
-                                   fs.allele_count,
-                                   fs.total_count)
-                                  for fs in allele_annotation[
-                                      'frequency_studies']]
-                    snv_clinical_diseases += [
-                        (new_ref_snp_allele_id,
-                         clin['disease_names'],
-                         clin['clinical_significances'],
-                         clin['citation_list'],)
-                        for clin in allele_annotation['clinical_entries']]
-            insert_queries = [
-                ('ref_snp_alleles',
-                    ('ref_snp_id', 'del_seq', 'ins_seq', 'position'),
-                    ref_snp_alleles),
-                ('gene_ref_snp_alleles',
-                    ('ref_snp_allele_id', 'locus', 'gene_id'),
-                    gene_ref_snp_alleles),
-                ('ref_snp_allele_freq_studies',
-                 ('ref_snp_allele_id', 'name', 'allele_count',
-                  'total_count'),
-                 snv_freqs),
-                ('ref_snp_allele_clin_diseases',
-                    ('ref_snp_allele_id', 'disease_name_csv',
-                     'clinical_significance_csv', 'citation_list'),
-                    snv_clinical_diseases)]
-            # futures = []
-            for j, (table_name, columns, records) in enumerate(insert_queries):
-                """futures.append(connections[j].copy_records_to_table(
+            if self.new_ref_snp_allele_id > 50000:
+                exit(1)
+            futures = [self.generate_insert_stmts(json_ls),
+                       self.read_json(dbsnp_fp, blocksize),
+                       self.insert_records(insert_stmts, conn)]
+            insert_stmts, json_ls, _ = await asyncio.gather(*futures)
+        await conn.close()
+
+    async def read_json(self, dbsnp_fp, blocksize):
+        raw_json = await dbsnp_fp.readlines(blocksize)
+        if not raw_json:
+            return None
+        return json.loads("[" + ",".join(raw_json) + "]")
+
+    async def generate_insert_stmts(self, json_ls):
+        (ref_snp_alleles, gene_ref_snp_alleles,
+         snv_freqs, snv_clinical_diseases) = [], [], [], []
+        if not json_ls:
+            return []
+        for rsnp_json in json_ls:
+            self._print_status()
+            rsnp_placements = rsnp_json['primary_snapshot_data'][
+                                    'placements_with_allele']
+            ref_snp_id = int(rsnp_json['refsnp_id'])
+            if not rsnp_placements:
+                continue
+            alleles = self.find_alleles_from_assembly(rsnp_placements)
+            if not alleles:
+                continue
+            variant_alleles = self.get_variant_allele(alleles)
+            if not variant_alleles:
+                continue
+            for variant_allele in variant_alleles:
+                # ref_snp_alleles.id is auto-incrementing, follow it!
+                self.new_ref_snp_allele_id += 1
+                allele_annotation = self.get_allele_annotation(
+                    rsnp_json, variant_allele['allele_idx'])
+                ref_snp_alleles.append((ref_snp_id,
+                                        variant_allele['del_seq'],
+                                        variant_allele['ins_seq'],
+                                        variant_allele['position'],))
+                gene_ref_snp_alleles += [(self.new_ref_snp_allele_id,
+                                          gene['locus'],
+                                          gene['id'],)
+                                         for gene in allele_annotation[
+                                             'genes']]
+                # NOTE: The 'observation' is stored in JSON redundantly...
+                snv_freqs += [(self.new_ref_snp_allele_id,
+                               fs.name,
+                               fs.allele_count,
+                               fs.total_count)
+                              for fs in allele_annotation[
+                                  'frequency_studies']]
+                snv_clinical_diseases += [
+                    (self.new_ref_snp_allele_id,
+                     clin['disease_names'],
+                     clin['clinical_significances'],
+                     clin['citation_list'],)
+                    for clin in allele_annotation['clinical_entries']]
+        insert_queries = [
+            ('ref_snp_alleles',
+                ('ref_snp_id', 'del_seq', 'ins_seq', 'position'),
+                ref_snp_alleles),
+            ('gene_ref_snp_alleles',
+                ('ref_snp_allele_id', 'locus', 'gene_id'),
+                gene_ref_snp_alleles),
+            ('ref_snp_allele_freq_studies',
+             ('ref_snp_allele_id', 'name', 'allele_count',
+              'total_count'),
+             snv_freqs),
+            ('ref_snp_allele_clin_diseases',
+                ('ref_snp_allele_id', 'disease_name_csv',
+                 'clinical_significance_csv', 'citation_list'),
+                snv_clinical_diseases)]
+        return insert_queries
+
+    async def insert_records(self, insert_stmts, conn):
+        # futures = []
+        for j, (table_name, columns, records) in enumerate(insert_stmts):
+            """futures.append(connections[j].copy_records_to_table(
+                           table_name,
+                           columns=columns,
+                           records=records))
+            """
+            await conn.copy_records_to_table(
                                table_name,
                                columns=columns,
-                               records=records))
-                """
-                await conn.copy_records_to_table(
-                                   table_name,
-                                   columns=columns,
-                                   records=records)
-            # await asyncio.gather(*futures)
-        conn.commit()
-        conn.close()
+                               records=records)
+        # await asyncio.gather(*futures)
 
     def find_alleles_from_assembly(self,
                                    rsnp_placements,
