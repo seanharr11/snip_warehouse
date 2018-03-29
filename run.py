@@ -14,7 +14,7 @@ async def main():
     snp_loadr = SnvLoader(DB_NAME)
     chr_suffixes = [i for i in range(1, 24)]
     chr_suffixes += ["X", "Y", "MT"]
-    for chr_suffix in chr_suffixes[:3]:
+    for chr_suffix in chr_suffixes[:1]:
         snp_loadr.download_dbsnp_file(f"refsnp-chr{chr_suffix}.json.gz")
         await snp_loadr.load_ref_snps(f"refsnp-chr{chr_suffix}.json")
         os.system(f"rm refsnp-chr{chr_suffix}.json")

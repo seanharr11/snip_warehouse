@@ -3,6 +3,7 @@ import asyncpg
 from collections import namedtuple
 import ftplib
 import ujson as json
+import sys
 import zlib
 
 # from .schema import (
@@ -34,12 +35,13 @@ class SnvLoader:
 
         def callback(byte_chunk):
             nonlocal transferred
-            fp.write(decompressor.decompress(byte_chunk))
-            transferred = transferred + 8192
+            transferred = transferred + sys.getsizeof(byte_chunk)
             transferred_mb = transferred / 1024 / 1024
             if transferred_mb % 10 == 0:
                 print(
-                    f"Transferred {transferred_mb}MB / {size / 1024 / 1024}MB")
+                    f"Transferred {transferred_mb}MB /"
+                    "{round(size / 1024 / 1024, 2)}MB")
+            fp.write(decompressor.decompress(byte_chunk))
 
         print(f"Filesize: {size / 1024 / 1024 / 1024}GB")
         ftp.retrbinary(f"RETR {dbsnp_filename}", callback, blocksize=blocksize)
@@ -53,15 +55,15 @@ class SnvLoader:
         self.ref_variant_generator = open(dbsnp_filename, "r")
         pool = await asyncpg.create_pool(
             user='SeanH', database=self.database_name)
-        connections = [await pool.acquire() for _ in range(4)]
-        conn = connections[0]
-        for cxn in connections:
-            await cxn.execute(
-                f"SET session_replication_role = replica")
+        conn = pool.acquire()
+        conn.execute(f"SET session_replication_role = replica")
         row = await conn.fetchrow(
-            "SELECT MAX(id) FROM ref_snp_alleles").fetchrow()
-        new_ref_snp_allele_id = row['id'] or 0
+            "SELECT MAX(id) FROM ref_snp_alleles")
+        new_ref_snp_allele_id = row[0] or 0
         while True:
+            # TODO: Multi-processing w/ file offsets, and Lock on
+            # 'ref_snp_allele_id'
+            # TODO: Async read from file, and write to DB.
             lines = ",\n".join(self.ref_variant_generator.readlines(
                 1024*1024*8))  # 8MB
             if not lines:
