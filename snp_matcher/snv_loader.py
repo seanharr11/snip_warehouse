@@ -55,7 +55,7 @@ class SnvLoader:
         self.ref_variant_generator = open(dbsnp_filename, "r")
         pool = await asyncpg.create_pool(
             user='SeanH', database=self.database_name)
-        conn = pool.acquire()
+        conn = await pool.acquire()
         conn.execute(f"SET session_replication_role = replica")
         row = await conn.fetchrow(
             "SELECT MAX(id) FROM ref_snp_alleles")
