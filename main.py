@@ -12,7 +12,7 @@ async def get_user_diseases(request):
             SELECT array_agg(disease_name_csv) disease_name_ls,
                    array_agg(array_to_string(citation_list, ',')) citation_ls,
                    array_agg(s.genotype) genotype_ls,
-                   array_agg(a.alt_seq) alt_seq_ls,
+                   array_agg(a.ins_seq) ins_seq_ls,
                    array_agg(s.ref_snp_id) ref_snp_id_ls,
                    Count(*) count,
                    clinical_significance_csv
@@ -21,20 +21,28 @@ async def get_user_diseases(request):
             ON a.id = d.ref_snp_allele_id
             INNER JOIN user_ref_snps s ON s.ref_snp_id = a.ref_snp_id
             WHERE s.user_id = $1
-             AND s.genotype iLIKE '%' || a.alt_seq  || '%'
+             AND ((s.genotype iLIKE '%' || a.ins_seq  || '%'
+                  AND a.ins_seq != ''
+                  AND a.del_seq != '')
+                  OR (s.genotype iLIKE '%I%'
+                      AND a.ins_seq != ''
+                      AND a.del_seq = '')
+                  OR (s.genotype iLIKE '%D%'
+                      AND a.ins_seq = ''
+                      AND a.del_seq != ''))
             GROUP BY clinical_significance_csv""", user_id)
         clin_sig_groups = {
             row['clinical_significance_csv']: [
                 {
                    "disease_name": d,
-                   "alt_seq": alt,
+                   "ins_seq": alt,
                    "genotype": geno,
                    "citation_list": cit.split(","),
                    "ref_snp_id": rsnp_id
                 } for d, cit, alt, geno, rsnp_id in zip(
                     row['disease_name_ls'],
                     row['citation_ls'],
-                    row['alt_seq_ls'],
+                    row['ins_seq_ls'],
                     row['genotype_ls'],
                     row['ref_snp_id_ls']
                 )]

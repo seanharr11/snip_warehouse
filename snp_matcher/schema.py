@@ -41,8 +41,8 @@ class RefSnpAllele(Base):
 
     id = Column(Integer, primary_key=True)
     ref_snp_id = Column(Integer, index=True)
-    ref_seq = Column(Text, index=True)
-    alt_seq = Column(Text, index=True)
+    ins_seq = Column(Text, index=True)
+    del_seq = Column(Text, index=True)
     position = Column(BigInteger)
 
 

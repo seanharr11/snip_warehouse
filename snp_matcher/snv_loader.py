@@ -58,7 +58,9 @@ class SnvLoader:
         for cxn in connections:
             await cxn.execute(
                 f"SET session_replication_role = replica")
-        new_ref_snp_allele_id = 0
+        row = await conn.fetchrow(
+            "SELECT MAX(id) FROM ref_snp_alleles").fetchrow()
+        new_ref_snp_allele_id = row['id'] or 0
         while True:
             lines = ",\n".join(self.ref_variant_generator.readlines(
                 1024*1024*8))  # 8MB
@@ -86,8 +88,8 @@ class SnvLoader:
                     allele_annotation = self.get_allele_annotation(
                         rsnp_json, variant_allele['allele_idx'])
                     ref_snp_alleles.append((ref_snp_id,
-                                            variant_allele['ref_seq'],
-                                            variant_allele['alt_seq'],
+                                            variant_allele['del_seq'],
+                                            variant_allele['ins_seq'],
                                             variant_allele['position'],))
                     gene_ref_snp_alleles += [(new_ref_snp_allele_id,
                                               gene['locus'],
@@ -109,7 +111,7 @@ class SnvLoader:
                         for clin in allele_annotation['clinical_entries']]
             insert_queries = [
                 ('ref_snp_alleles',
-                    ('ref_snp_id', 'ref_seq', 'alt_seq', 'position'),
+                    ('ref_snp_id', 'del_seq', 'ins_seq', 'position'),
                     ref_snp_alleles),
                 ('gene_ref_snp_alleles',
                     ('ref_snp_allele_id', 'locus', 'gene_id'),
@@ -166,8 +168,8 @@ class SnvLoader:
             var_spdi = allele_tup[0]['allele']['spdi']
             allele_idx = allele_tup[1]
             var_alleles.append({
-                'ref_seq': var_spdi['deleted_sequence'],
-                'alt_seq': var_spdi['inserted_sequence'],
+                'del_seq': var_spdi['deleted_sequence'],
+                'ins_seq': var_spdi['inserted_sequence'],
                 'position': var_spdi['position'],
                 'allele_idx': allele_idx
             })
