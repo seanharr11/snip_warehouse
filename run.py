@@ -1,7 +1,7 @@
 import asyncio
 import os
-from snp_matcher import SnvLoader, SnvUploader
-from snp_matcher.schema import init_db
+from snip_warehouse import SnvLoader, SnvUploader
+from snip_warehouse.schema import init_db
 loop = asyncio.get_event_loop()
 
 DB_NAME = "snvs_chr_1"
@@ -15,9 +15,9 @@ async def main(loop):
     chr_suffixes = [i for i in range(1, 24)]
     chr_suffixes += ["X", "Y", "MT"]
     for chr_suffix in chr_suffixes[:1]:
-        # snp_loadr.download_dbsnp_file(f"refsnp-chr{chr_suffix}.json.gz")
+        snp_loadr.download_dbsnp_file(f"refsnp-chr{chr_suffix}.json.gz")
         await snp_loadr.load_ref_snps(f"refsnp-chr{chr_suffix}.json")
-        # os.system(f"rm refsnp-chr{chr_suffix}.json")
+        os.system(f"rm refsnp-chr{chr_suffix}.json")
     snv_uploader = SnvUploader(DB_NAME)
     await snv_uploader.connect()
     with open("data/23_and_me_snps.txt", "r") as fp:

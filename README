@@ -1,0 +1,1 @@
+Parse 23andMe raw SNPS file, and link it with data in dbSNP to determine variants in the file.

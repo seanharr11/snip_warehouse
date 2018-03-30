@@ -4,7 +4,6 @@ import asyncpg
 from collections import namedtuple
 import ftplib
 import ujson as json
-import sys
 import zlib
 
 # from .schema import (
@@ -30,6 +29,7 @@ class SnvLoader:
         transferred = 0
         fp = open(dbsnp_filename.replace(".gz", ""), "wb")
         blocksize = 8192
+        blocks = 0
         ftp = ftplib.FTP("ftp.ncbi.nlm.nih.gov")
         ftp.login()
         ftp.cwd("snp/.redesign/latest_release/JSON")
@@ -37,15 +37,17 @@ class SnvLoader:
 
         def callback(byte_chunk):
             nonlocal transferred
-            transferred = transferred + sys.getsizeof(byte_chunk)
-            transferred_mb = transferred / 1024 / 1024
-            if transferred_mb % 10 == 0:
+            nonlocal blocks
+            blocks += 1
+            transferred = transferred + len(byte_chunk)
+            transferred_mb = round(transferred / 1024 / 1024, 2)
+            if blocks % 1000 == 0:
                 print(
-                    f"Transferred {transferred_mb}MB /"
-                    "{round(size / 1024 / 1024, 2)}MB")
+                    f"Transferred {transferred_mb}MB / "
+                    f"{round(size / 1024 / 1024, 2)}MB")
             fp.write(decompressor.decompress(byte_chunk))
 
-        print(f"Filesize: {size / 1024 / 1024 / 1024}GB")
+        print(f"Filesize: {round(size / 1024 / 1024 / 1024, 2)} GB")
         ftp.retrbinary(f"RETR {dbsnp_filename}", callback, blocksize=blocksize)
 
     def _print_status(self):
@@ -57,7 +59,7 @@ class SnvLoader:
         dbsnp_fp = await aiofiles.open(dbsnp_filename, "r", loop=self.loop)
         pool = await asyncpg.create_pool(
             user='SeanH', database=self.database_name, loop=self.loop)
-        blocksize = 1024 * 1024 * 8   # 8MB
+        blocksize = 1024 * 1024 * 1  # 1MB
         conn = await pool.acquire()
         await conn.execute(f"SET session_replication_role = replica")
         row = await conn.fetchrow(
@@ -69,8 +71,6 @@ class SnvLoader:
         while json_ls:
             # TODO: Multi-processing w/ file offsets, and Lock on
             # 'ref_snp_allele_id'
-            if self.new_ref_snp_allele_id > 50000:
-                exit(1)
             futures = [self.generate_insert_stmts(json_ls),
                        self.read_json(dbsnp_fp, blocksize),
                        self.insert_records(insert_stmts, conn)]
