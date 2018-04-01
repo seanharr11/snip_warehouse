@@ -3,6 +3,8 @@ import asyncio
 import asyncpg
 from collections import namedtuple
 import ftplib
+import time
+import threading
 import ujson as json
 import zlib
 
@@ -25,30 +27,41 @@ class SnvLoader:
         # self.db_conn_string = db_conn_string
 
     def download_dbsnp_file(self, dbsnp_filename):
-        decompressor = zlib.decompressobj(32 + zlib.MAX_WBITS)
-        transferred = 0
-        fp = open(dbsnp_filename.replace(".gz", ""), "wb")
-        blocksize = 8192
-        blocks = 0
         ftp = ftplib.FTP("ftp.ncbi.nlm.nih.gov")
+        ftp.set_debuglevel(2)
         ftp.login()
         ftp.cwd("snp/.redesign/latest_release/JSON")
         size = ftp.size(dbsnp_filename)
-
-        def callback(byte_chunk):
-            nonlocal transferred
-            nonlocal blocks
-            blocks += 1
-            transferred = transferred + len(byte_chunk)
-            transferred_mb = round(transferred / 1024 / 1024, 2)
-            if blocks % 1000 == 0:
-                print(
-                    f"Transferred {transferred_mb}MB / "
-                    f"{round(size / 1024 / 1024, 2)}MB")
-            fp.write(decompressor.decompress(byte_chunk))
-
         print(f"Filesize: {round(size / 1024 / 1024 / 1024, 2)} GB")
-        ftp.retrbinary(f"RETR {dbsnp_filename}", callback, blocksize=blocksize)
+        sock = None
+        while not sock:
+            print("Trying to establish FTP conn")
+            sock = ftp.transfercmd(f"RETR {dbsnp_filename}")
+            time.sleep(5)
+
+        def download():
+            decompressor = zlib.decompressobj(32 + zlib.MAX_WBITS)
+            transferred = 0
+            fp = open(dbsnp_filename.replace(".gz", ""), "wb")
+            blocks = 0
+            while True:
+                byte_chunk = sock.recv(1024*1024*8)
+                if not byte_chunk:
+                    break
+                blocks += 1
+                transferred = transferred + len(byte_chunk)
+                transferred_mb = round(transferred / 1024 / 1024, 2)
+                if blocks % 1000 == 0:
+                    print(
+                        f"Transferred {transferred_mb}MB / "
+                        f"{round(size / 1024 / 1024, 2)}MB")
+                fp.write(decompressor.decompress(byte_chunk))
+            sock.close()
+        t = threading.Thread(target=download)
+        t.start()
+        while t.is_alive():
+            t.join(60)
+            ftp.voidcmd("NOOP")
 
     def _print_status(self):
         if self.rows_processed % 10000 == 0:
