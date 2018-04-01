@@ -1,3 +1,6 @@
+psycopg2
+asyncpg
+aiofiles
 appnope==0.1.0
 decorator==4.2.1
 ipdb==0.11
@@ -13,7 +16,6 @@ Pygments==2.2.0
 simplegeneric==0.8.1
 six==1.11.0
 ## !! Could not determine repository location
-snp-matcher==0.1
 SQLAlchemy==1.2.4
 traitlets==4.3.2
 ujson==1.35
