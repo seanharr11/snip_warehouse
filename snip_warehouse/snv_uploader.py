@@ -31,7 +31,7 @@ class SnvUploader:
         record_gen = ((int(r[0].replace("rs", "").replace("i", "")),
                        # int(r[1]),
                        r[3],
-                       user_id,) for r in cr if r[1] == '1')
+                       user_id,) for r in cr)
         await self.conn.copy_records_to_table(
             "user_ref_snps",
             columns=("ref_snp_id", "genotype", "user_id",),
