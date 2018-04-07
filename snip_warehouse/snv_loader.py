@@ -3,7 +3,10 @@ import asyncio
 import asyncpg
 from collections import namedtuple
 import ftplib
+from multiprocessing import cpu_count, Value, Process
+import os
 import time
+from sqlalchemy import create_engine
 import threading
 import ujson as json
 import zlib
@@ -19,11 +22,12 @@ FrequencyStudy = namedtuple('FrequencyStudy', [
 
 
 class SnvLoader:
-    def __init__(self, database_name, loop):  # , db_conn_string):
+    def __init__(self, database_name):  # , db_conn_string):
         self._variant_output_filename = "./variants.csv"
-        self.rows_processed = 0
+        self.rows_processed = Value('i', 0)
+        self.new_ref_snp_allele_id = None
         self.database_name = database_name
-        self.loop = loop
+        self.file_blocksize = 1024 * 1024
         # self.db_conn_string = db_conn_string
 
     def download_dbsnp_file(self, dbsnp_filename):
@@ -64,37 +68,83 @@ class SnvLoader:
             ftp.voidcmd("NOOP")
 
     def _print_status(self):
-        if self.rows_processed % 10000 == 0:
-            print(f"Processed '{self.rows_processed}' Ref SNPs")
-        self.rows_processed += 1
+        if self.rows_processed.value % 10000 == 0:
+            print(f"Processed '{self.rows_processed.value}' Ref SNPs")
+        self.rows_processed.value += 1
 
-    async def load_ref_snps(self, dbsnp_filename):
-        dbsnp_fp = await aiofiles.open(dbsnp_filename, "r", loop=self.loop)
-        pool = await asyncpg.create_pool(
-            user='SeanH', database=self.database_name, loop=self.loop)
-        blocksize = 1024 * 1024 * 1  # 1MB
-        conn = await pool.acquire()
+    def load_ref_snps(self, dbsnp_filename):
+        num_processes = cpu_count()
+        print(f"Found '{num_processes}' CPUs")
+        conn = create_engine(os.environ['SNVS_DB_URL'])
+        row = conn.execute(
+            "SELECT MAX(id) FROM ref_snp_alleles").fetchone()
+        self.new_ref_snp_allele_id = Value('i', row[0] or 0)
+        start_offset = 0
+        end_offset = 0
+        file_size = os.path.getsize(dbsnp_filename)
+        for i in range(num_processes):
+            with open(dbsnp_filename, "r") as fp:
+                end_offset = self._find_newline_offset(
+                    fp, end_offset + file_size // num_processes)
+            p = Process(target=self._load_ref_snps,
+                        args=(dbsnp_filename, start_offset, end_offset))
+            start_offset = end_offset
+            print(f"starting process '{i}'")
+            p.start()
+
+    @staticmethod
+    def _find_newline_offset(fp, line_offset):
+        if line_offset == 0:
+            return fp
+        else:
+            fp.seek(line_offset)
+            fp.readline()
+            return fp.tell()
+
+    def _load_ref_snps(self, dbsnp_filename, start_offset, end_offset):
+        print(f"Handling bytes '{start_offset}' => '{end_offset}'")
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(
+            self._async_load_ref_snps(
+                dbsnp_filename, start_offset, end_offset, loop))
+
+    async def _async_load_ref_snps(self, dbsnp_filename,
+                                   start_offset, end_offset, loop):
+        dbsnp_fp = await aiofiles.open(dbsnp_filename, "r", loop=loop)
+        conn = await asyncpg.connect(
+            user='SeanH', database=self.database_name, loop=loop)
         await conn.execute(f"SET session_replication_role = replica")
-        row = await conn.fetchrow(
-            "SELECT MAX(id) FROM ref_snp_alleles")
-        self.new_ref_snp_allele_id = row[0] or 0
-
-        json_ls = await self.read_json(dbsnp_fp, blocksize)
+        await dbsnp_fp.seek(start_offset)
+        json_ls, offset = await self.read_json(dbsnp_fp, self.file_blocksize)
         insert_stmts = []
-        while json_ls:
-            # TODO: Multi-processing w/ file offsets, and Lock on
-            # 'ref_snp_allele_id'
+        while json_ls and offset < end_offset:
             futures = [self.generate_insert_stmts(json_ls),
-                       self.read_json(dbsnp_fp, blocksize),
+                       self.read_json(dbsnp_fp, self.file_blocksize),
                        self.insert_records(insert_stmts, conn)]
-            insert_stmts, json_ls, _ = await asyncio.gather(*futures)
+            insert_stmts, (json_ls, offset), _ = await asyncio.gather(*futures)
+        print(f"Bytes '{start_offset}' -> '{end_offset}' parsed!")
+        await dbsnp_fp.close()
         await conn.close()
 
-    async def read_json(self, dbsnp_fp, blocksize):
-        raw_json = await dbsnp_fp.readlines(blocksize)
-        if not raw_json:
-            return None
-        return json.loads("[" + ",".join(raw_json) + "]")
+    @staticmethod
+    async def read_json(dbsnp_fp, blocksize):
+        # TODO: Couldn't blocksize be "num_lines" ?
+        init_tell = tell = prev_tell = await dbsnp_fp.tell()
+        raw_json = ""
+        while True:
+            line = await dbsnp_fp.readline()
+            prev_tell = tell
+            tell = await dbsnp_fp.tell()
+            if not line:
+                break  # EOF
+            if (tell - init_tell) > blocksize:
+                # Went past our blocksize...
+                await dbsnp_fp.seek(prev_tell)
+                tell = prev_tell
+                break
+            raw_json += (line + ",")
+        final_json = raw_json[:-1] if raw_json else ""
+        return json.loads("[" + final_json + "]"), tell
 
     async def generate_insert_stmts(self, json_ls):
         (ref_snp_alleles, gene_ref_snp_alleles,
@@ -116,34 +166,36 @@ class SnvLoader:
                 continue
             for variant_allele in variant_alleles:
                 # ref_snp_alleles.id is auto-incrementing, follow it!
-                self.new_ref_snp_allele_id += 1
+                with self.new_ref_snp_allele_id.get_lock():
+                    self.new_ref_snp_allele_id.value += 1
+                    new_ref_snp_allele_id = self.new_ref_snp_allele_id.value
                 allele_annotation = self.get_allele_annotation(
                     rsnp_json, variant_allele['allele_idx'])
-                ref_snp_alleles.append((ref_snp_id,
+                ref_snp_alleles.append((new_ref_snp_allele_id,
+                                        ref_snp_id,
                                         variant_allele['del_seq'],
                                         variant_allele['ins_seq'],
                                         variant_allele['position'],))
-                gene_ref_snp_alleles += [(self.new_ref_snp_allele_id,
+                gene_ref_snp_alleles += [(new_ref_snp_allele_id,
                                           gene['locus'],
                                           gene['id'],)
                                          for gene in allele_annotation[
                                              'genes']]
-                # NOTE: The 'observation' is stored in JSON redundantly...
-                snv_freqs += [(self.new_ref_snp_allele_id,
+                snv_freqs += [(new_ref_snp_allele_id,
                                fs.name,
                                fs.allele_count,
                                fs.total_count)
                               for fs in allele_annotation[
                                   'frequency_studies']]
                 snv_clinical_diseases += [
-                    (self.new_ref_snp_allele_id,
+                    (new_ref_snp_allele_id,
                      clin['disease_names'],
                      clin['clinical_significances'],
                      clin['citation_list'],)
                     for clin in allele_annotation['clinical_entries']]
         insert_queries = [
             ('ref_snp_alleles',
-                ('ref_snp_id', 'del_seq', 'ins_seq', 'position'),
+                ('id', 'ref_snp_id', 'del_seq', 'ins_seq', 'position'),
                 ref_snp_alleles),
             ('gene_ref_snp_alleles',
                 ('ref_snp_allele_id', 'locus', 'gene_id'),
