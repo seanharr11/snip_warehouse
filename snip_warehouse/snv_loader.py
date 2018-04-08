@@ -78,7 +78,7 @@ class SnvLoader:
         conn = create_engine(os.environ['SNVS_DB_URL'])
         row = conn.execute(
             "SELECT MAX(id) FROM ref_snp_alleles").fetchone()
-        self.new_ref_snp_allele_id = Value('i', row[0] or 0)
+        self.new_ref_snp_allele_id = Value('i', (row[0] or 0) + 1)
         start_offset = 0
         end_offset = 0
         file_size = os.path.getsize(dbsnp_filename)
