@@ -30,23 +30,26 @@ class SnvLoader:
         self.file_blocksize = 1024 * 1024
         # self.db_conn_string = db_conn_string
 
-    def download_dbsnp_file(self, dbsnp_filename):
+    def download_dbsnp_file(self, dbsnp_filename, chromosome):
+        self.chromosome = chromosome
+        self.dbsnp_filename = dbsnp_filename
+
         ftp = ftplib.FTP("ftp.ncbi.nlm.nih.gov")
         ftp.set_debuglevel(2)
         ftp.login()
         ftp.cwd("snp/.redesign/latest_release/JSON")
-        size = ftp.size(dbsnp_filename)
+        size = ftp.size(self.dbsnp_filename)
         print(f"Filesize: {round(size / 1024 / 1024 / 1024, 2)} GB")
         sock = None
         while not sock:
             print("Trying to establish FTP conn")
-            sock = ftp.transfercmd(f"RETR {dbsnp_filename}")
+            sock = ftp.transfercmd(f"RETR {self.dbsnp_filename}")
             time.sleep(5)
 
         def download():
             decompressor = zlib.decompressobj(32 + zlib.MAX_WBITS)
             transferred = 0
-            fp = open(dbsnp_filename.replace(".gz", ""), "wb")
+            fp = open(self.dbsnp_filename.replace(".gz", ""), "wb")
             blocks = 0
             while True:
                 byte_chunk = sock.recv(1024*1024*8)
@@ -72,7 +75,7 @@ class SnvLoader:
             print(f"Processed '{self.rows_processed.value}' Ref SNPs")
         self.rows_processed.value += 1
 
-    def load_ref_snps(self, dbsnp_filename):
+    def load_ref_snps(self):
         num_processes = cpu_count()
         print(f"Found '{num_processes}' CPUs")
         conn = create_engine(os.environ['SNVS_DB_URL'])
@@ -81,14 +84,14 @@ class SnvLoader:
         self.new_ref_snp_allele_id = Value('i', (row[0] or 0) + 1)
         start_offset = 0
         end_offset = 0
-        file_size = os.path.getsize(dbsnp_filename)
+        file_size = os.path.getsize(self.dbsnp_filename)
         processes = []
         for i in range(num_processes):
-            with open(dbsnp_filename, "r") as fp:
+            with open(self.dbsnp_filename, "r") as fp:
                 end_offset = self._find_newline_offset(
                     fp, end_offset + file_size // num_processes)
             p = Process(target=self._load_ref_snps,
-                        args=(dbsnp_filename, start_offset, end_offset))
+                        args=(start_offset, end_offset))
             start_offset = end_offset
             print(f"starting process '{i}'")
             p.start()
@@ -105,16 +108,15 @@ class SnvLoader:
             fp.readline()
             return fp.tell()
 
-    def _load_ref_snps(self, dbsnp_filename, start_offset, end_offset):
+    def _load_ref_snps(self, start_offset, end_offset):
         print(f"Handling bytes '{start_offset}' => '{end_offset}'")
         loop = asyncio.get_event_loop()
         loop.run_until_complete(
             self._async_load_ref_snps(
-                dbsnp_filename, start_offset, end_offset, loop))
+                self.dbsnp_filename, start_offset, end_offset, loop))
 
-    async def _async_load_ref_snps(self, dbsnp_filename,
-                                   start_offset, end_offset, loop):
-        dbsnp_fp = await aiofiles.open(dbsnp_filename, "r", loop=loop)
+    async def _async_load_ref_snps(self, start_offset, end_offset, loop):
+        dbsnp_fp = await aiofiles.open(self.dbsnp_filename, "r", loop=loop)
         conn = await asyncpg.connect(
             user='SeanH', database=self.database_name, loop=loop)
         await conn.execute(f"SET session_replication_role = replica")
@@ -179,7 +181,8 @@ class SnvLoader:
                                         ref_snp_id,
                                         variant_allele['del_seq'],
                                         variant_allele['ins_seq'],
-                                        variant_allele['position'],))
+                                        variant_allele['position'],
+                                        self.chromosome,))
                 gene_ref_snp_alleles += [(new_ref_snp_allele_id,
                                           gene['locus'],
                                           gene['id'],)
@@ -199,7 +202,8 @@ class SnvLoader:
                     for clin in allele_annotation['clinical_entries']]
         insert_queries = [
             ('ref_snp_alleles',
-                ('id', 'ref_snp_id', 'del_seq', 'ins_seq', 'position'),
+                ('id', 'ref_snp_id', 'del_seq', 'ins_seq',
+                 'position', 'chromosome'),
                 ref_snp_alleles),
             ('gene_ref_snp_alleles',
                 ('ref_snp_allele_id', 'locus', 'gene_id'),
