@@ -82,6 +82,7 @@ class SnvLoader:
         start_offset = 0
         end_offset = 0
         file_size = os.path.getsize(dbsnp_filename)
+        processes = []
         for i in range(num_processes):
             with open(dbsnp_filename, "r") as fp:
                 end_offset = self._find_newline_offset(
@@ -91,6 +92,9 @@ class SnvLoader:
             start_offset = end_offset
             print(f"starting process '{i}'")
             p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
 
     @staticmethod
     def _find_newline_offset(fp, line_offset):
