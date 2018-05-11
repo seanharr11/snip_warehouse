@@ -44,6 +44,7 @@ class RefSnpAllele(Base):
     ins_seq = Column(Text, index=True)
     del_seq = Column(Text, index=True)
     position = Column(BigInteger)
+    chromosome = Column(String(2))
 
 
 class RefSnpFrequencyStudy(Base):

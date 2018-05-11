@@ -1,3 +1,7 @@
+# TODO: Open the data compressed!
+# TODO: mmap
+# TODO: uuid in-liue of shared-memory
+
 import aiofiles
 import asyncio
 import asyncpg
@@ -173,6 +177,8 @@ class SnvLoader:
             for variant_allele in variant_alleles:
                 # ref_snp_alleles.id is auto-incrementing, follow it!
                 with self.new_ref_snp_allele_id.get_lock():
+                    # TODO: Don't lock!! Get this value back from the insert
+                    # John Reese
                     self.new_ref_snp_allele_id.value += 1
                     new_ref_snp_allele_id = self.new_ref_snp_allele_id.value
                 allele_annotation = self.get_allele_annotation(
