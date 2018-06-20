@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 Base = declarative_base()
 metadata = Base.metadata
-engine = create_engine(os.environ["SNVS_DB_URL"])
+engine = create_engine(os.environ["SNIP_DB_URL"])
 metadata.bind = engine
 smaker = sessionmaker(bind=engine)
 

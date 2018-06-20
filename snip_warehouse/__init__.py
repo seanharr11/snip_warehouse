@@ -1,4 +1,4 @@
-from .snv_loader import SnvLoader
-from .snv_uploader import SnipUploader
+from .snip_loader import SnipLoader
+from .snip_uploader import SnipUploader
 
-__all__ = ['SnvLoader', 'SnipUploader']
+__all__ = ['SnipLoader', 'SnipUploader']
