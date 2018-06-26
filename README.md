@@ -3,7 +3,7 @@
 ### Intro
 NCBI hosts a large, open-sourced dataset of human SNPs (Single-nucleotide Polymorphisms). Further, they store a good deal of auxillary data that is related to each SNP. The data is hosted on an FTP server here:
 
-> ftp://ftp.ncbi.nlm.nih.gov/snp/.redesign/latest_release/JSON)
+> ftp://ftp.ncbi.nlm.nih.gov/snp/.redesign/latest_release/JSON
 
 and is split across 25 gzipped JSON files (Chromosomes 1-22, X, Y and Mitochondrial DNA), amassing a total compressed size of **~100GB** (**~2TB uncompressed!**).
 
