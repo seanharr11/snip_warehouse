@@ -15,7 +15,6 @@ ptyprocess==0.5.2
 Pygments==2.2.0
 simplegeneric==0.8.1
 six==1.11.0
-## !! Could not determine repository location
 SQLAlchemy==1.2.4
 traitlets==4.3.2
 ujson==1.35

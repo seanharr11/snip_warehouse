@@ -43,4 +43,3 @@
         i. "ACCT" was isnerted in b/t positions c.4375 and c.4376
     k. *Replacement (indel)*: c.4375_4376delinsAGTT
         i. Nucleotides from 4375 -> 4376 (CG) were deleted, and replaced w/ new seq.
-

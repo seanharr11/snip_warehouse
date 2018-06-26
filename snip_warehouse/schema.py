@@ -2,9 +2,10 @@
 import os
 from sqlalchemy import (
      BigInteger, Integer, Text, String,
-     ForeignKey, Column, create_engine)
+     ForeignKey, Column, create_engine,
+     ForeignKeyConstraint)
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.ext.declarative import declarative_base, declared_attr
 from sqlalchemy.orm import sessionmaker
 
 
@@ -27,43 +28,44 @@ class Gene(Base):
     description = Column(Text)
 
 
-class GeneRefSnp(Base):
-    __tablename__ = "gene_ref_snp_alleles"
-    id = Column(Integer, primary_key=True)
-    gene_id = Column(Integer, index=True)
-    ref_snp_allele_id = Column(ForeignKey('ref_snp_alleles.id'),
-                               index=True)
-    locus = Column(Text, index=True)
-
-
 class RefSnpAllele(Base):
     __tablename__ = 'ref_snp_alleles'
 
-    id = Column(Integer, primary_key=True)
-    ref_snp_id = Column(Integer, index=True)
     ins_seq = Column(Text, index=True)
     del_seq = Column(Text, index=True)
     position = Column(BigInteger)
     chromosome = Column(String(2))
 
+    ref_snp_allele_idx = Column(Integer, primary_key=True)
+    ref_snp_id = Column(Integer, primary_key=True)
+    gene_locii = Column(ARRAY(Text, dimensions=1))
 
-class RefSnpFrequencyStudy(Base):
-    __tablename__ = 'ref_snp_allele_freq_studies'
+
+class RefSnpAlleleRelative(object):
+    __tablename__ = 'ref_snp_allele_relative'
 
     id = Column(Integer, primary_key=True)
-    ref_snp_allele_id = Column(ForeignKey('ref_snp_alleles.id'),
-                               index=True)
+    ref_snp_allele_idx = Column(index=True)
+    ref_snp_id = Column(index=True)
+
+    @declared_attr
+    def __table_args__(cls):
+        return (ForeignKeyConstraint(
+            [cls.ref_snp_id, cls.ref_snp_allele_idx],
+            [RefSnpAllele.ref_snp_id, RefSnpAllele.ref_snp_allele_idx]), {})
+
+
+class RefSnpAlleleFrequencyStudy(RefSnpAlleleRelative, Base):
+    __tablename__ = 'ref_snp_allele_freq_studies'
+
     name = Column(Text)
     allele_count = Column(Integer)
     total_count = Column(Integer)
 
 
-class RefSnpClinicalDiseases(Base):
+class RefSnpClinicalDisease(RefSnpAlleleRelative, Base):
     __tablename__ = 'ref_snp_allele_clin_diseases'
 
-    id = Column(Integer, primary_key=True)
-    ref_snp_allele_id = Column(ForeignKey('ref_snp_alleles.id'),
-                               index=True)
     disease_name_csv = Column(Text)
     clinical_significance_csv = Column(Text)
     citation_list = Column(ARRAY(Integer, dimensions=1))
