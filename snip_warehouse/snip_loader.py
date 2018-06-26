@@ -83,17 +83,20 @@ class SnipLoader:
             buff_size += 1
             if buff_size % 5000 == 0:  # Dump
                 print(f"Dumping (SNPs Processed: {buff_size})")
-                for table_name in row_buff_dict.keys():
-                    records = row_buff_dict[table_name]
-                    if not records:
-                        continue
-                    await conn.copy_records_to_table(
-                        table_name,
-                        records=records,
-                        columns=records[0]._fields)
-                    row_buff_dict[table_name] = []
+                await self._dump_buffer(row_buff_dict, conn)
+                row_buff_dict = {table_name: [] for table_name in table_names}
                 print("Done.")
         await conn.close()
+
+    async def _dump_buffer(self, row_buff_dict, conn):
+        for table_name in row_buff_dict.keys():
+            records = row_buff_dict[table_name]
+            if not records:
+                continue
+            await conn.copy_records_to_table(
+                table_name,
+                records=records,
+                columns=records[0]._fields)
 
     def _generate_parsed_data(self, raw_line) -> RefSnpCopyFromData:
         rsnp_json = json.loads(raw_line)
