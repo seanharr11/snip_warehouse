@@ -1,7 +1,5 @@
-import asyncio
 import asyncpg
 import csv
-import os
 
 
 class SnipUploader:
@@ -38,26 +36,7 @@ class SnipUploader:
                        # int(r[1]),
                        r[3],
                        user_id,) for r in cr)
-        """
-        await self.conn.executemany(
-            "INSERT INTO user_ref_snps (ref_snp_id, genotype, user_id)"
-            " VALUES($1, $2, $3)", record_gen)
-        """
         await self.conn.copy_records_to_table(
             "user_ref_snps",
             columns=("ref_snp_id", "genotype", "user_id",),
             records=record_gen)
-
-
-async def main():
-    snv_uploader = SnipUploader(
-        username=os.environ['SNIP_DB_INSERT_USERNAME'],
-        password=os.environ['SNIP_DB_INSERT_PASSWORD'],
-        host=os.environ['SNIP_DB_HOST']
-    )
-    await snv_uploader.connect()
-    with open("data/23_and_me_snps.txt", "r") as fp:
-        await snv_uploader.upload(fp, 1)
-
-if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(main())
